@@ -5,6 +5,6 @@ Analyses of bulk and single-cell RNAseq data from:
 https://doi.org/10.1242/dev.202853
 
 + 2D-cultured TECs, thymic epithelial organoids and _In vivo_ TECs - bulkRNAseq
-+ ORFTOCs and FTOCs- scRNAseq
++ ORFTOCs and FTOCs - scRNAseq
 + TCR data from ORFTOCs and FTOCs - scRNAseq
 + Integration of ORFTOCs and FTOCs with the dataset from Park et al. 2020  (_DOI: 10.1126/science.aay3224_) - scRNAseq
