@@ -1,0 +1,220 @@
+############## Thymic epithelial organoids mediate T cell development ##############
+############## ORFTOC and FTOC single-cell RNA-Seq analysis  ##############
+
+
+### Packages
+library(Seurat)
+library(scDblFinder)
+library(scater)
+library(gprofiler2)
+library(scCustomize)
+
+
+### Seed
+
+set.seed(18)
+
+
+### Single-cell RNA-Seq data is available here: 
+# https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE240698
+# GSM7707611	ORFTOC FTOC - GEX
+# GSM7707612	ORFTOC FTOC - TCR
+# GSM7707613	ORFTOC FTOC - HTO
+
+### set working directory containing the datasets
+# setwd(" ")
+
+
+### Read data
+
+expression_matrix <- Read10X(data.dir = getwd(), gene.column = 2)
+
+HTOab <- expression_matrix$`Antibody Capture`
+SO <- CreateSeuratObject(expression_matrix$`Gene Expression`, project = "FTOC_OrgRFTOC",assay = "RNA")
+SO[["HTO"]] <- CreateAssayObject(counts = HTOab)
+SO <-subset(SO, subset = nFeature_RNA > 100 & nCount_HTO > 1)
+
+
+### Pre-processing for doublet removal and HTO classification
+
+SO[["percent.mito"]] <- PercentageFeatureSet(SO, assay="RNA", pattern = "^mt-")
+SO <- subset(SO, subset = nFeature_RNA > 600 & percent.mito < 10 & percent.mito > 0.4)
+
+
+SO <- NormalizeData(SO, assay = "HTO", normalization.method = "CLR")
+
+SO <- HTODemux(SO, assay = "HTO", positive.quantile = 0.99)
+
+SOpre <- SO
+
+SOpre <- NormalizeData(SOpre, assay = "RNA")
+SOpre <- FindVariableFeatures(SOpre, selection.method = "mean.var.plot")
+all.genes <- rownames(SOpre)
+SOpre <- ScaleData(SOpre, features=all.genes)
+SOpre <- RunPCA(SOpre, assay = "RNA", features = VariableFeatures(object = SOpre))
+
+
+### Doublet removal
+
+Doublets <- SOpre@meta.data$HTO_classification.global=="Doublet"
+IDDoublets <- which(Doublets)
+IDCells <- c(colnames(SOpre))
+Cellnamedoublets <- IDCells[IDDoublets]
+
+Exp.matrix2 <- as.SingleCellExperiment(SOpre)
+AllDoublets <- recoverDoublets(Exp.matrix2, use.dimred="PCA", doublets=Cellnamedoublets, k=10, samples=c(1, 1))
+
+
+sce.hash <- Exp.matrix2
+sce.hash <- runUMAP(sce.hash, dimred="PCA")
+sce.hash$proportion <- AllDoublets$proportion
+sce.hash$predicted <- AllDoublets$predicted
+sce.hash$known <- AllDoublets$known
+
+
+gridExtra::grid.arrange(
+  plotUMAP(sce.hash, colour_by="proportion") + ggtitle("Doublet proportions"),
+  plotUMAP(sce.hash, colour_by="known") + ggtitle("Known doublets"),
+  ggcells(sce.hash) +
+    geom_point(aes(x=UMAP.1, y=UMAP.2), color="grey") +
+    geom_point(aes(x=UMAP.1, y=UMAP.2), color="red", 
+               data=function(x) x[x$predicted,]) +
+    ggtitle("Predicted intra-sample doublets"),
+  ncol=2        
+)
+
+SO[["DoubletClassification"]] <- AllDoublets$predicted
+
+
+### HTO classification
+
+Idents(SO) <- "HTO_classification.global"
+SO.subsetHTO <- subset(SO, idents = "Singlet")
+
+Idents(SO.subsetHTO) <- "DoubletClassification"
+SO.subset <- subset(SO.subsetHTO, subset = DoubletClassification == "FALSE")
+
+
+### Cell-cycle scoring
+# ! the following commands require internet access !
+
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+
+mmus_s = gorth(cc.genes.updated.2019$s.genes, source_organism = "hsapiens", target_organism = "mmusculus")$ortholog_name
+mmus_g2m = gorth(cc.genes.updated.2019$g2m.genes, source_organism = "hsapiens", target_organism = "mmusculus")$ortholog_name
+
+s.genes <- mmus_s
+g2m.genes <- mmus_g2m
+
+SO.subset<- CellCycleScoring(SO.subset, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+
+SO.subset <- SCTransform(SO.subset, method = "glmGamPoi", vst.flavor="v2", vars.to.regress = c("S.Score", "G2M.Score"), variable.features.n = 10000)
+
+
+### PCA
+
+SO.subset <- RunPCA(SO.subset)
+
+ElbowPlot(SO.subset)
+
+
+### Find clusters corresponding to the main input population
+
+SO.subset18 <- FindNeighbors(SO.subset, dims = 1:18)
+SO.subset18 <- FindClusters(SO.subset18, resolution = 0.005)
+
+
+
+SO.subset18100520 <- RunUMAP(SO.subset18, dims = 1:18, n.neighbors = 10, min.dist = 0.5, seed.use = 20)
+DimPlot(SO.subset18100520, reduction = "umap", group.by = 'seurat_clusters', cols = c("lightpink1", "gray62", "goldenrod1"))
+
+SO.subset18100520.cluster.ids <- c("Immune","Epithelial","Mesenchyme")
+names(SO.subset18100520.cluster.ids) <- levels(SO.subset18100520)
+SO.subset18100520ID <- RenameIdents(SO.subset18100520, SO.subset18100520.cluster.ids)
+DimPlot(SO.subset18100520ID, reduction = "umap", cols = c("lightpink1", "gray62", "goldenrod1"))
+
+FeaturePlot(SO.subset18100520, c("Ptprc","Epcam","Pdgfra"))
+
+Idents(SO.subset18100520) <- SO.subset18100520@meta.data[["seurat_clusters"]]
+
+
+### Subsets the three main populations 
+
+SO.Epithelial <- subset(SO.subset18100520, idents = 1)
+SO.Immune <- subset(SO.subset18100520, idents = 0)
+SO.Mesenchyme <- subset(SO.subset18100520, idents = 2)
+
+Markers <- AverageExpression(object = SO.subset18100520, features = c("Ptprc", "Epcam", "Pdgfra"), assays = "RNA")
+head(Markers)
+
+Ptprcavalue = (Markers$RNA[1,2] + Markers$RNA[1,3])/2
+Epcamvalue = (Markers$RNA[2,1] + Markers$RNA[2,3])/2
+Pdgfravalue = (Markers$RNA[3,1] + Markers$RNA[3,2])/2
+
+
+
+SO.Epithelial <- subset(SO.Epithelial, subset = Ptprc > Ptprcavalue, invert =TRUE)
+SO.Epithelial <- subset(SO.Epithelial, subset = Pdgfra > Pdgfravalue, invert =TRUE)
+
+
+SO.Immune <- subset(SO.Immune, subset = Epcam > Epcamvalue, invert =TRUE)
+SO.Immune <- subset(SO.Immune, subset = Pdgfra > Pdgfravalue, invert =TRUE)
+
+SO.Mesenchyme <- subset(SO.Mesenchyme, subset = Ptprc > Ptprcavalue, invert =TRUE)
+SO.Mesenchyme <- subset(SO.Mesenchyme, subset = Epcam > Epcamvalue, invert =TRUE)
+
+
+
+##### The UMAP might be slightly changing depending on R and packages version.
+##### We thus provide also RDS objects corresponding to the Epithelial (SO.EpithelialID) and Immune (SO.ImmuneID) populations that were used for downstream analysis here: 
+
+
+
+### Finding epithelial clusters
+
+SO.Epithelial<- FindNeighbors(SO.Epithelial, dims = 1:18)
+SO.Epithelial04 <- FindClusters(SO.Epithelial, resolution = 0.4)
+DimPlot(SO.Epithelial04, reduction = "umap", group.by ='seurat_clusters',label = TRUE)
+DimPlot(SO.Epithelial, reduction = "umap", group.by ='hash.ID')
+
+
+### Finding immune clusters
+
+SO.Immune<- FindNeighbors(SO.Immune, dims = 1:18) 
+SO.Immune3 <- FindClusters(SO.Immune, resolution = 3)
+DimPlot(SO.Immune3, reduction = "umap", group.by ='seurat_clusters',label = TRUE, pt.size = 1)
+DimPlot(SO.Immune, reduction = "umap", group.by ='hash.ID')
+
+
+
+### Merging and renaming immune clusters, and plotting key genes
+new.cluster.ids <- c("TSP to DNearly2","Innate T Cells","DP quiescent","DP quiescent","Cd4","DP quiescent","Innate Proliferative","First Wave","DP blast", "DP quiescent", "DP quiescent","DP quiescent","Cd8","DN selected to ISP","DP69+","DN commitment","TSP to DNearly1","DP quiescent","Other Immune Cells","DP quiescent","Cd8","TSP to DNearly1","DN3a","DP blast","TSP to DNearly2","DP quiescent","Other Immune Cells","DP quiescent","DP quiescent","TSP to DNearly1")
+names(new.cluster.ids) <- levels(SO.Immune3)
+SO.ImmuneID <- RenameIdents(SO.Immune3, new.cluster.ids)
+DimPlot(SO.ImmuneID, reduction = "umap", label = TRUE,   label.size = 6, pt.size = 1) + NoLegend()
+
+
+SO.ImmuneID@active.ident <- factor(SO.ImmuneID@active.ident, 
+                                   levels=c("Other Immune Cells", "Innate T Cells","Innate Proliferative", "First Wave","TSP to DNearly1", "TSP to DNearly2","DN commitment","DN3a","DN selected to ISP","DP blast","DP quiescent","DP69+","Cd4","Cd8"))
+ImmuneDotPlot <- c("Kit","Cd44","Il2ra","Cd7","Tcf7","Bcl11b","Ptcra","Cd3e","Cd28","Cd4","Cd8a","Mki67","Rag1","Rag2","Myc","Cd69","Cd5","Nr4a1","Bcl2l11","Ccr7","Nlrc5","Tnfrsf4","Cd40lg","Runx3","Eomes","Sell","Klrd1","Cd68")
+DotPlot(SO.ImmuneID, features = ImmuneDotPlot)
+
+cols = c("lightgrey", "blue")
+DotPlot_scCustom(SO.ImmuneID, features = ImmuneDotPlot, colors_use = cols, x_lab_rotate = TRUE)
+
+SO.ImmuneID$ClusterName <- paste(SO.ImmuneID@active.ident)
+
+
+
+### Renaming epithelial clusters and plotting key genes
+
+Epithelial.cluster.ids <- c("Pre Aire mTEC","Adult Bipotent Progenitor-like","cTEC", "Early cTEC","Early mTEC","Tuft-like mTEC (IV)","Aire and Spink5 mTEC (II/III)")
+names(Epithelial.cluster.ids) <- levels(SO.Epithelial04)
+SO.EpithelialID <- RenameIdents(SO.Epithelial04, Epithelial.cluster.ids)
+DimPlot(SO.EpithelialID, reduction = "umap", label = TRUE,   label.size = 6, pt.size = 1) + NoLegend()
+
+
+FeaturePlot(SO.Epithelial, c("Cxcl12","Ascl1","Ccl21a","Psmb11","Aire","Spink5","Avil","Bpifa1"))
+
+
