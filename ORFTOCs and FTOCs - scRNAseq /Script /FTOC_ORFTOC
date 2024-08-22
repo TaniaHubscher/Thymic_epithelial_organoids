@@ -218,7 +218,7 @@ DimPlot(SO.EpithelialID, reduction = "umap", label = TRUE,   label.size = 6, pt.
 FeaturePlot(SO.Epithelial, c("Cxcl12","Ascl1","Ccl21a","Psmb11","Aire","Spink5","Avil","Bpifa1"))
 
 
-sessioninfo()
+sessionInfo()
 # R version 4.1.2 (2021-11-01)
 # Platform: x86_64-w64-mingw32/x64 (64-bit)
 # Running under: Windows 10 x64 (build 22631)
