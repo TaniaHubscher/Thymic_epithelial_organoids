@@ -168,6 +168,8 @@ SO.Mesenchyme <- subset(SO.Mesenchyme, subset = Epcam > Epcamvalue, invert =TRUE
 
 ##### The UMAP might be slightly changing depending on R and packages version.
 ##### We thus provide also RDS objects corresponding to the Epithelial (SO.EpithelialID) and Immune (SO.ImmuneID) populations that were used for downstream analysis here: 
+##### https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE240697 (in the supplementary files). 
+##### We still provide the code used in our analysis below. 
 
 
 
